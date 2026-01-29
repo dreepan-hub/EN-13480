@@ -1,6 +1,11 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import inch
+from io import BytesIO
+import matplotlib.pyplot as plt
 
 # Material data med tillåtna spänningar f (MPa) vid olika temperaturer (°C)
 # Baserat på typiska värden från EN 13480-2 tabeller (approximativa; verifiera med standarden)
@@ -56,8 +61,8 @@ else:
     temps = mat_data["temps"]
     f_values = mat_data["f_values"]
     if T_design < min(temps) or T_design > max(temps):
-        st.warning(f"Temperatur {T_design}°C utanför tabell-range ({min(temps)}–{max(temps)}°C). Extrapolerar, men verifiera med EN 13480-2!")
-    f_design = np.interp(T_design, temps, f_values, left="extrapolate", right="extrapolate")
+        st.warning(f"Temperatur {T_design}°C utanför tabell-range ({min(temps)}–{max(temps)}°C). Använder konstant extrapolation (värde vid närmaste gräns). Verifiera med EN 13480-2!")
+    f_design = np.interp(T_design, temps, f_values)  # Inga left/right behövs – default är bra
 
 st.write(f"**Tillåten spänning f vid {T_design}°C:** {f_design:.1f} MPa")
 
@@ -75,7 +80,7 @@ st.write(f"**Min tjocklek e_min (inkl. c):** {e_min_header:.2f} mm")
 if e_min_header > t_header_nom:
     st.warning("Varning: e_min > t_nom – underdimensionerad!")
 
-# Rördelar (nytt!)
+# Rördelar
 use_fitting = st.checkbox("Inkludera rördelar-beräkning?")
 if use_fitting:
     st.subheader("Rördelar (Fittings)")
@@ -161,8 +166,8 @@ else:
     temps = mat_data["temps"]
     f_values = mat_data["f_values"]
     if T_test < min(temps) or T_test > max(temps):
-        st.warning(f"Testtemp {T_test}°C utanför range – extrapolerar!")
-    f_test = np.interp(T_test, temps, f_values, left="extrapolate", right="extrapolate")
+        st.warning(f"Testtemp {T_test}°C utanför range – använder konstant extrapolation.")
+    f_test = np.interp(T_test, temps, f_values)
 
 st.write(f"**Tillåten spänning f vid {T_test}°C:** {f_test:.1f} MPa")
 
@@ -199,3 +204,69 @@ st.dataframe(df)
 
 csv = df.to_csv(index=False).encode('utf-8')
 st.download_button("Ladda ner som CSV", csv, "en13480_resultat.csv", "text/csv")
+
+# Funktion för att skapa enkel bild av rör med OD och tjocklek
+def create_pipe_diagram(D_o, t_nom, branch_D_o=None, branch_t_nom=None):
+    fig, ax = plt.subplots(figsize=(6, 4))
+    # Rita header-rör
+    ax.add_patch(plt.Rectangle((0, 0), D_o, t_nom, fill=None, edgecolor='blue', linewidth=2, label='Header tjocklek'))
+    ax.add_patch(plt.Rectangle((0, t_nom), D_o, D_o - 2*t_nom, fill=None, edgecolor='black', linewidth=1, label='Inner diameter'))
+    ax.text(D_o/2, -10, f'OD = {D_o} mm', ha='center')
+    ax.text(D_o + 10, t_nom/2, f't = {t_nom} mm', va='center')
+    
+    if branch_D_o and branch_t_nom:
+        # Rita avstick
+        ax.add_patch(plt.Rectangle((D_o/2 - branch_D_o/2, D_o), branch_D_o, branch_t_nom, fill=None, edgecolor='green', linewidth=2, label='Branch tjocklek'))
+        ax.text(D_o/2, D_o + branch_t_nom + 10, f'Branch OD = {branch_D_o} mm', ha='center')
+        ax.text(D_o/2 + branch_D_o/2 + 10, D_o + branch_t_nom/2, f't = {branch_t_nom} mm', va='center')
+    
+    ax.axis('equal')
+    ax.axis('off')
+    ax.legend()
+    
+    buf = BytesIO()
+    fig.savefig(buf, format='png', dpi=100)
+    buf.seek(0)
+    plt.close(fig)
+    return buf
+
+# PDF-rapport
+if st.button("Generera och ladda ner PDF-rapport"):
+    pdf_buffer = BytesIO()
+    c = canvas.Canvas(pdf_buffer, pagesize=letter)
+    width, height = letter
+    
+    # Titel
+    c.drawString(100, height - 50, "EN 13480-3 Beräkningsrapport")
+    
+    # Sammanfattningstabell
+    y = height - 100
+    for i, row in df.iterrows():
+        c.drawString(100, y, f"{row['Parameter']}: {row['Värde']}")
+        y -= 20
+        if y < 50:
+            c.showPage()
+            y = height - 50
+    
+    # Lägg till bild
+    if y < 300:  # Ny sida om nödvändigt
+        c.showPage()
+        y = height - 50
+    c.drawString(100, y, "Diagram över rördelar (OD och tjocklek):")
+    y -= 20
+    
+    # Skapa och lägg till bild
+    branch_D_o = D_o_branch if use_branch and 'D_o_branch' in locals() else None
+    branch_t_nom = t_branch_nom if use_branch and 't_branch_nom' in locals() else None
+    img_buf = create_pipe_diagram(D_o_header, t_header_nom, branch_D_o, branch_t_nom)
+    c.drawInlineImage(img_buf, 100, y - 200, width=4*inch, height=3*inch)
+    
+    c.save()
+    pdf_buffer.seek(0)
+    
+    st.download_button(
+        label="Ladda ner PDF-rapport",
+        data=pdf_buffer,
+        file_name="en13480_rapport.pdf",
+        mime="application/pdf"
+    )
