@@ -6,6 +6,28 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from datetime import datetime
 
+# Lösenordsskydd (ändra värdet i Streamlit Secrets)
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == st.secrets["password"]:
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.text_input("Ange lösenord", type="password", on_change=password_entered, key="password")
+        return False
+    elif not st.session_state["password_correct"]:
+        st.text_input("Ange lösenord", type="password", on_change=password_entered, key="password")
+        st.error("Fel lösenord")
+        return False
+    else:
+        return True
+
+if not check_password():
+    st.stop()
+
 # Material data
 materials = {
     "P235GH (Kolstål)": {"temps": [20, 100, 150, 200, 250, 300], "f_values": [150, 143, 135, 127, 117, 104]},
@@ -32,7 +54,7 @@ with st.expander("Grunddata", expanded=True):
     use_custom = st.checkbox("Använd egen rapportrubrik?")
     custom_title = ""
     if use_custom:
-        custom_title = st.text_input("Egen rubrik", "")
+        custom_title = st.text_input("Egen rubrik (t.ex. 'Projekt X – Linje 5')", "")
     rapportrubrik = custom_title.strip() if custom_title.strip() else auto_title
     st.markdown(f"**Rapportrubrik:** {rapportrubrik}")
 
@@ -84,8 +106,8 @@ with st.expander("Böj (§6.2.3)"):
             e_int = e_ext = e_min
             st.warning("r/D_o ≤ 0.5 – använder raka rör-värde")
         else:
-            e_int = e_min * (r_d - 0.25) / (r_d - 0.5)
-            e_ext = e_min * (r_d + 0.25) / (r_d + 0.5)
+            e_int = e_min * (r_d - 0.25) / (r_d - 0.5)  # 6.2.3-1
+            e_ext = e_min * (r_d + 0.25) / (r_d + 0.5)  # 6.2.3-2
 
         e_total_int = e_int + c
         e_total_ext = e_ext + c
@@ -116,7 +138,6 @@ with st.expander("Reducer (§6.5)"):
         st.write(f"**e_min reducer:** {e_min_red:.3f} mm (max av ändar)")
         if alpha > 20:
             st.warning("α > 20° – extra förstärkning kan krävas §6.5.3")
-        st.info("Formel: Max av raka rör-formel på båda ändar")
 
 # Tee
 with st.expander("Tee (§8.5)"):
@@ -215,7 +236,7 @@ st.subheader("Sammanfattning")
 st.dataframe(df_summary)
 
 # PDF
-if st.button("Ladda ner PDF"):
+if st.button("Ladda ner PDF-rapport"):
     pdf_buffer = BytesIO()
     c = canvas.Canvas(pdf_buffer, pagesize=letter)
     w, h = letter
@@ -229,8 +250,11 @@ if st.button("Ladda ner PDF"):
     c.drawString(100, y, f"Beräknat: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
     y -= 40
 
-    for i, row in df_summary.iterrows():
-        if row['Parameter'] == "Rapportrubrik":
+    c.drawString(100, y, f"Provtryckningstemperatur: {T_test} °C")
+    y -= 30
+
+    for _, row in df_summary.iterrows():
+        if row['Parameter'] in ["Rapportrubrik", "Beräknat", "Provtryckningstemp"]:
             continue
         c.drawString(100, y, f"{row['Parameter']}: {row['Värde']}")
         y -= 20
@@ -240,4 +264,10 @@ if st.button("Ladda ner PDF"):
 
     c.save()
     pdf_buffer.seek(0)
-    st.download_button("Ladda ner PDF", pdf_buffer, "en13480_rapport.pdf", "application/pdf")
+
+    filename = f"en13480_{datetime.now().strftime('%Y%m%d_%H%M')}"
+    if custom_title.strip():
+        filename += f"_{custom_title[:20].replace(' ', '_')}"
+    filename += ".pdf"
+
+    st.download_button("Ladda ner PDF", pdf_buffer, filename, "application/pdf")
