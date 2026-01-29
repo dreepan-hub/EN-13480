@@ -39,7 +39,7 @@ materials = {
     }
 }
 
-st.title("EN 13480-3 – Komplett Beräkning för Rörsystem & Avstick")
+st.title("EN 13480-3 – Komplett Beräkning för Rörsystem, Avstick & Rördelar")
 
 # Allmänna parametrar
 material = st.selectbox("Material (från EN 13480-2)", list(materials.keys()))
@@ -48,14 +48,22 @@ T_design = st.number_input("Designtemperatur (°C)", min_value=-50.0, value=100.
 z = st.number_input("Fogfaktor z", min_value=0.4, max_value=1.0, value=1.0, step=0.05)
 c = st.number_input("Korrosions-/slitagetillägg c (mm)", min_value=0.0, value=1.0, step=0.1)
 
-# Hämta f_design vid T_design (interpolera om nödvändigt)
+# Hämta f_design vid T_design (med extrapolation och varning)
 if material == "Annan":
     f_design = st.number_input("Tillåten spänning f vid designtemp (MPa)", min_value=0.0, value=100.0)
 else:
     mat_data = materials[material]
-    f_design = np.interp(T_design, mat_data["temps"], mat_data["f_values"])
+    temps = mat_data["temps"]
+    f_values = mat_data["f_values"]
+    if T_design < min(temps) or T_design > max(temps):
+        st.warning(f"Temperatur {T_design}°C utanför tabell-range ({min(temps)}–{max(temps)}°C). Extrapolerar, men verifiera med EN 13480-2!")
+    f_design = np.interp(T_design, temps, f_values, left="extrapolate", right="extrapolate")
 
 st.write(f"**Tillåten spänning f vid {T_design}°C:** {f_design:.1f} MPa")
+
+if f_design <= 0:
+    st.error("f_design ≤ 0 – kan inte beräkna! Justera material eller temp.")
+    st.stop()
 
 # Raka rör / Header
 st.subheader("Raka rör / Header")
@@ -64,6 +72,40 @@ t_header_nom = st.number_input("Header nominell tjocklek t_nom (mm)", min_value=
 
 e_min_header = (P * D_o_header) / (2 * f_design * z + P) + c
 st.write(f"**Min tjocklek e_min (inkl. c):** {e_min_header:.2f} mm")
+if e_min_header > t_header_nom:
+    st.warning("Varning: e_min > t_nom – underdimensionerad!")
+
+# Rördelar (nytt!)
+use_fitting = st.checkbox("Inkludera rördelar-beräkning?")
+if use_fitting:
+    st.subheader("Rördelar (Fittings)")
+    fitting_typ = st.selectbox("Typ av rördel", ["Böj (elbow)", "Reducer (koncentrisk)", "Tee (branching)"])
+
+    if fitting_typ == "Böj (elbow)":
+        R_bend = st.number_input("Böjradie R (mm)", min_value=10.0, value=D_o_header * 1.5, step=10.0)
+        D_o_bend = st.number_input("Böjdiameter D_o (mm)", min_value=10.0, value=D_o_header, step=1.0)
+        lambda_factor = (D_o_bend * R_bend) / (t_header_nom ** 2)  # approx från 6.3.2
+        e_min_bend = (P * D_o_bend * (1 + (D_o_bend / (2 * R_bend)))) / (2 * f_design * z + P) + c  # förenklad formel 6.3-1
+        st.write(f"**Min tjocklek e_min för böj:** {e_min_bend:.2f} mm")
+        if lambda_factor < 0.9:
+            st.warning("Låg lambda – kontrollera buckling enligt 6.3.3!")
+
+    elif fitting_typ == "Reducer (koncentrisk)":
+        D_o_large = st.number_input("Stor diameter D_o (mm)", min_value=10.0, value=168.3, step=1.0)
+        D_o_small = st.number_input("Liten diameter d_o (mm)", min_value=10.0, value=114.3, step=1.0)
+        alpha = st.number_input("Konvinkel α (°)", min_value=0.0, max_value=30.0, value=15.0, step=1.0)
+        e_min_reducer = max((P * D_o_large) / (2 * f_design * z + P), (P * D_o_small) / (2 * f_design * z + P)) + c  # max av båda ändar
+        if alpha > 20:
+            st.warning("Hög konvinkel – extra förstärkning kan krävas enligt 6.5.3.")
+        st.write(f"**Min tjocklek e_min för reducer:** {e_min_reducer:.2f} mm")
+
+    elif fitting_typ == "Tee (branching)":
+        # Liknande avstick, men med tee-specifika faktorer
+        D_o_branch = st.number_input("Branch diameter d_o (mm)", min_value=10.0, value=60.3, step=1.0)
+        t_branch_nom = st.number_input("Branch nominell tjocklek (mm)", min_value=1.0, value=5.0, step=0.1)
+        A_req_tee = 2.5 * t_header_nom * D_o_branch  # approx från 8.5 för tee
+        st.write(f"**Required area A_req för tee:** ≈ {A_req_tee:.1f} mm²")
+        # Lägg till reinforcement-logik som i avstick om du vill utöka
 
 # Avstick / Branch (valfritt)
 use_branch = st.checkbox("Inkludera avstick-beräkning?")
@@ -116,7 +158,11 @@ if material == "Annan":
     f_test = st.number_input("Tillåten spänning f vid testtemp (MPa)", min_value=0.0, value=150.0)
 else:
     mat_data = materials[material]
-    f_test = np.interp(T_test, mat_data["temps"], mat_data["f_values"])
+    temps = mat_data["temps"]
+    f_values = mat_data["f_values"]
+    if T_test < min(temps) or T_test > max(temps):
+        st.warning(f"Testtemp {T_test}°C utanför range – extrapolerar!")
+    f_test = np.interp(T_test, temps, f_values, left="extrapolate", right="extrapolate")
 
 st.write(f"**Tillåten spänning f vid {T_test}°C:** {f_test:.1f} MPa")
 
@@ -132,6 +178,16 @@ sammanfattning = {
     "Parameter": ["Material", "Designtryck P", "Designtemp T", "f_design", "Header D_o", "Min tjocklek e_min", "Testtemp T_test", "f_test", "Provtryck P_test"],
     "Värde": [material, f"{P:.2f} MPa", f"{T_design}°C", f"{f_design:.1f} MPa", f"{D_o_header} mm", f"{e_min_header:.2f} mm", f"{T_test}°C", f"{f_test:.1f} MPa", f"{P_test:.2f} MPa"]
 }
+
+if use_fitting:
+    sammanfattning["Parameter"].append("Rördel typ")
+    sammanfattning["Värde"].append(fitting_typ)
+    if fitting_typ == "Böj (elbow)":
+        sammanfattning["Parameter"].append("Min tjocklek böj")
+        sammanfattning["Värde"].append(f"{e_min_bend:.2f} mm")
+    elif fitting_typ == "Reducer (koncentrisk)":
+        sammanfattning["Parameter"].append("Min tjocklek reducer")
+        sammanfattning["Värde"].append(f"{e_min_reducer:.2f} mm")
 
 if use_branch:
     sammanfattning["Parameter"].extend(["Branch d_o", "Branch typ", "Vinkel β", "Reinforcement", "A_req (approx)", "A_avail (approx)"])
