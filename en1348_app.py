@@ -230,6 +230,12 @@ def create_pipe_diagram(D_o, t_nom, branch_D_o=None, branch_t_nom=None):
     plt.close(fig)
     return buf
 
+# ... (resten av koden oförändrad)
+
+from reportlab.lib.utils import ImageReader  # Lägg till denna import högst upp
+
+# ... (create_pipe_diagram-funktionen oförändrad)
+
 # PDF-rapport
 if st.button("Generera och ladda ner PDF-rapport"):
     pdf_buffer = BytesIO()
@@ -248,18 +254,24 @@ if st.button("Generera och ladda ner PDF-rapport"):
             c.showPage()
             y = height - 50
     
-    # Lägg till bild
-    if y < 300:  # Ny sida om nödvändigt
+    # Lägg till text och bild
+    if y < 300:
         c.showPage()
         y = height - 50
-    c.drawString(100, y, "Diagram över rördelar (OD och tjocklek):")
-    y -= 20
     
-    # Skapa och lägg till bild
+    c.drawString(100, y, "Diagram över rördelar (OD och tjocklek):")
+    y -= 30  # Lite mer utrymme
+    
+    # Skapa bilden
     branch_D_o = D_o_branch if use_branch and 'D_o_branch' in locals() else None
     branch_t_nom = t_branch_nom if use_branch and 't_branch_nom' in locals() else None
     img_buf = create_pipe_diagram(D_o_header, t_header_nom, branch_D_o, branch_t_nom)
-    c.drawInlineImage(img_buf, 100, y - 200, width=4*inch, height=3*inch)
+    
+    # Använd ImageReader för att wrapa BytesIO
+    img_reader = ImageReader(img_buf)
+    
+    # Rita bilden – använd drawImage istället för drawInlineImage (bättre caching, men funkar även inline)
+    c.drawImage(img_reader, 100, y - 220, width=400, height=300, preserveAspectRatio=True)
     
     c.save()
     pdf_buffer.seek(0)
